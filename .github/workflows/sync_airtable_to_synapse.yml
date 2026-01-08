@@ -8,6 +8,7 @@ on:
 
 jobs:
   sync:
+    if: false  # Workflow disabled - do not run automatically
     runs-on: ubuntu-latest
     
     steps:
