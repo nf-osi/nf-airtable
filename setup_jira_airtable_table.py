@@ -173,7 +173,7 @@ def create_jira_table(base_id: str, table_name: str, airtable_pat: str) -> bool:
     }
     
     try:
-        response = requests.post(url, headers=headers, json=table_schema)
+        response = requests.post(url, headers=headers, json={'tables': [table_schema]})
         
         if response.status_code == 200:
             logger.info(f"Successfully created table '{table_name}'")
@@ -196,10 +196,10 @@ def main():
         logger.error(f"Failed to load credentials: {e}")
         sys.exit(1)
     
-    # Get required environment variables (try both cases)
-    AIRTABLE_BASE_ID = os.environ.get('AIRTABLE_BASE_ID', creds.get('airtable_base_id') or creds.get('AIRTABLE_BASE_ID'))
-    AIRTABLE_TABLE_NAME = os.environ.get('AIRTABLE_TABLE_NAME', creds.get('airtable_table_name') or creds.get('AIRTABLE_TABLE_NAME') or 'Jira Issues')
-    AIRTABLE_PAT = creds.get('airtable_pat') or creds.get('AIRTABLE_PAT')
+    # Get required environment variables
+    AIRTABLE_BASE_ID = os.environ.get('AIRTABLE_BASE_ID', creds.get('airtable_base_id'))
+    AIRTABLE_TABLE_NAME = os.environ.get('AIRTABLE_TABLE_NAME', creds.get('airtable_table_name', 'Jira Issues'))
+    AIRTABLE_PAT = creds.get('airtable_pat')
     
     # Validate required variables
     if not AIRTABLE_BASE_ID:

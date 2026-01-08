@@ -66,54 +66,34 @@ def convert_date_to_epoch(value: Any) -> Optional[int]:
 
 
 def load_credentials(creds_path: str = "creds.yaml") -> Dict[str, str]:
-    """Load credentials from YAML file."""
+    """Load credentials from YAML file or environment variables."""
+    creds = {}
+
+    # Load from creds.yaml (proper YAML format)
     creds_file = Path(creds_path)
-    if not creds_file.exists():
-        raise FileNotFoundError(
-            f"Credentials file not found: {creds_path}. "
-            "Please create it based on example_creds.yaml"
-        )
-    
-    # Read file content
-    with open(creds_file, 'r') as f:
-        content = f.read()
-    
-    # Try to parse as YAML first
-    airtable_pat = None
-    synapse_pat = None
-    try:
-        creds = yaml.safe_load(content)
-        if isinstance(creds, dict) and creds:
-            airtable_pat = creds.get('AIRTABLE_PAT') or creds.get('airtable_pat')
-            synapse_pat = creds.get('SYNAPSE_PAT') or creds.get('synapse_pat')
-    except yaml.YAMLError:
-        pass  # Will try key=value format below
-    
-    # If YAML parsing didn't work or returned None, try parsing as key=value format
-    if not airtable_pat or not synapse_pat:
-        for line in content.split('\n'):
-            line = line.strip()
-            # Skip comments and empty lines
-            if not line or line.startswith('#'):
-                continue
-            if line.startswith('AIRTABLE_PAT='):
-                airtable_pat = line.split('=', 1)[1].strip('"\'')
-            elif line.startswith('SYNAPSE_PAT='):
-                synapse_pat = line.split('=', 1)[1].strip('"\'')
-    
-    # Fallback to environment variables
-    airtable_pat = airtable_pat or os.getenv('AIRTABLE_PAT')
-    synapse_pat = synapse_pat or os.getenv('SYNAPSE_PAT')
-    
-    if not airtable_pat:
+    if creds_file.exists():
+        try:
+            with open(creds_file, 'r') as f:
+                yaml_creds = yaml.safe_load(f)
+                if yaml_creds and isinstance(yaml_creds, dict):
+                    # Normalize keys to lowercase
+                    creds = {k.lower(): v for k, v in yaml_creds.items()}
+        except Exception as e:
+            logger.warning(f"Could not read {creds_path}: {e}")
+
+    # Environment variables override file (normalize to lowercase)
+    env_keys = ['AIRTABLE_PAT', 'SYNAPSE_PAT']
+    for key in env_keys:
+        if key in os.environ:
+            creds[key.lower()] = os.environ[key]
+
+    # Validate required credentials
+    if not creds.get('airtable_pat'):
         raise ValueError("AIRTABLE_PAT not found in credentials file or environment")
-    if not synapse_pat:
+    if not creds.get('synapse_pat'):
         raise ValueError("SYNAPSE_PAT not found in credentials file or environment")
-    
-    return {
-        'airtable_pat': airtable_pat,
-        'synapse_pat': synapse_pat
-    }
+
+    return creds
 
 
 def get_synapse_schema_info(syn: Synapse, table_id: str) -> Dict[str, List[str]]:

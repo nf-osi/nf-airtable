@@ -45,54 +45,34 @@ def convert_epoch_to_date(value: Any) -> Optional[str]:
 
 
 def load_credentials(creds_path: str = "creds.yaml") -> Dict[str, str]:
-    """Load credentials from YAML file."""
+    """Load credentials from YAML file or environment variables."""
+    creds = {}
+
+    # Load from creds.yaml (proper YAML format)
     creds_file = Path(creds_path)
-    if not creds_file.exists():
-        raise FileNotFoundError(
-            f"Credentials file not found: {creds_path}. "
-            "Please create it based on example_creds.yaml"
-        )
-    
-    # Read file content
-    with open(creds_file, 'r') as f:
-        content = f.read()
-    
-    # Try to parse as YAML first
-    airtable_pat = None
-    synapse_pat = None
-    try:
-        creds = yaml.safe_load(content)
-        if isinstance(creds, dict) and creds:
-            airtable_pat = creds.get('AIRTABLE_PAT') or creds.get('airtable_pat')
-            synapse_pat = creds.get('SYNAPSE_PAT') or creds.get('synapse_pat')
-    except yaml.YAMLError:
-        pass  # Will try key=value format below
-    
-    # If YAML parsing didn't work or returned None, try parsing as key=value format
-    if not airtable_pat or not synapse_pat:
-        for line in content.split('\n'):
-            line = line.strip()
-            # Skip comments and empty lines
-            if not line or line.startswith('#'):
-                continue
-            if line.startswith('AIRTABLE_PAT='):
-                airtable_pat = line.split('=', 1)[1].strip('"\'')
-            elif line.startswith('SYNAPSE_PAT='):
-                synapse_pat = line.split('=', 1)[1].strip('"\'')
-    
-    # Fallback to environment variables
-    airtable_pat = airtable_pat or os.getenv('AIRTABLE_PAT')
-    synapse_pat = synapse_pat or os.getenv('SYNAPSE_PAT')
-    
-    if not airtable_pat:
+    if creds_file.exists():
+        try:
+            with open(creds_file, 'r') as f:
+                yaml_creds = yaml.safe_load(f)
+                if yaml_creds and isinstance(yaml_creds, dict):
+                    # Normalize keys to lowercase
+                    creds = {k.lower(): v for k, v in yaml_creds.items()}
+        except Exception as e:
+            logger.warning(f"Could not read {creds_path}: {e}")
+
+    # Environment variables override file (normalize to lowercase)
+    env_keys = ['AIRTABLE_PAT', 'SYNAPSE_PAT']
+    for key in env_keys:
+        if key in os.environ:
+            creds[key.lower()] = os.environ[key]
+
+    # Validate required credentials
+    if not creds.get('airtable_pat'):
         raise ValueError("AIRTABLE_PAT not found in credentials file or environment")
-    if not synapse_pat:
+    if not creds.get('synapse_pat'):
         raise ValueError("SYNAPSE_PAT not found in credentials file or environment")
-    
-    return {
-        'airtable_pat': airtable_pat,
-        'synapse_pat': synapse_pat
-    }
+
+    return creds
 
 
 def get_synapse_schema_info(syn: Synapse, table_id: str) -> Dict[str, List[str]]:
@@ -292,26 +272,26 @@ def sync_to_airtable(
 
 def main():
     """Main sync function."""
-    # Configuration - these should be set via environment variables or config file
-    # Support both old SYNAPSE_TABLE_ID and new SYNAPSE_SOURCE_VIEW_ID for backward compatibility
-    SYNAPSE_SOURCE_VIEW_ID = os.getenv('SYNAPSE_SOURCE_VIEW_ID') or os.getenv('SYNAPSE_TABLE_ID', 'syn52677631')
-    AIRTABLE_BASE_ID = os.getenv('AIRTABLE_BASE_ID')
-    AIRTABLE_TABLE_NAME = os.getenv('AIRTABLE_TABLE_NAME')
-    SYNAPSE_KEY_FIELD = os.getenv('SYNAPSE_KEY_FIELD')  # Required: field to match records
-    
-    if not AIRTABLE_BASE_ID:
-        raise ValueError("AIRTABLE_BASE_ID environment variable is required")
-    if not AIRTABLE_TABLE_NAME:
-        raise ValueError("AIRTABLE_TABLE_NAME environment variable is required")
-    if not SYNAPSE_KEY_FIELD:
-        raise ValueError("SYNAPSE_KEY_FIELD environment variable is required to prevent duplicate records")
-    
-    # Load credentials
+    # Load credentials first
     try:
         creds = load_credentials()
     except Exception as e:
         logger.error(f"Failed to load credentials: {e}")
         sys.exit(1)
+
+    # Configuration - load from creds or environment variables
+    # Support both old SYNAPSE_TABLE_ID and new SYNAPSE_SOURCE_VIEW_ID for backward compatibility
+    SYNAPSE_SOURCE_VIEW_ID = creds.get('synapse_source_view_id') or creds.get('synapse_table_id', 'syn52677631')
+    AIRTABLE_BASE_ID = creds.get('airtable_base_id')
+    AIRTABLE_TABLE_NAME = creds.get('airtable_table_name')
+    SYNAPSE_KEY_FIELD = creds.get('synapse_key_field')  # Required: field to match records
+
+    if not AIRTABLE_BASE_ID:
+        raise ValueError("AIRTABLE_BASE_ID is required in creds.yaml or environment")
+    if not AIRTABLE_TABLE_NAME:
+        raise ValueError("AIRTABLE_TABLE_NAME is required in creds.yaml or environment")
+    if not SYNAPSE_KEY_FIELD:
+        raise ValueError("SYNAPSE_KEY_FIELD is required in creds.yaml or environment to prevent duplicate records")
     
     # Initialize Synapse client
     logger.info("Connecting to Synapse...")
