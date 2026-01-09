@@ -65,35 +65,46 @@ def convert_date_to_epoch(value: Any) -> Optional[int]:
     return None
 
 
-def load_credentials(creds_path: str = "creds.yaml") -> Dict[str, str]:
-    """Load credentials from YAML file or environment variables."""
-    creds = {}
+def load_config() -> Dict[str, str]:
+    """Load configuration and credentials from config.yml and creds.yaml."""
+    config = {}
 
-    # Load from creds.yaml (proper YAML format)
-    creds_file = Path(creds_path)
-    if creds_file.exists():
+    # Load from config.yml (non-sensitive settings)
+    if os.path.exists('config.yml'):
         try:
-            with open(creds_file, 'r') as f:
+            with open('config.yml', 'r') as f:
+                yaml_config = yaml.safe_load(f)
+                if yaml_config and isinstance(yaml_config, dict):
+                    # Normalize keys to lowercase
+                    config.update({k.lower(): v for k, v in yaml_config.items()})
+        except Exception as e:
+            logger.warning(f"Could not read config.yml: {e}")
+
+    # Load from creds.yaml (sensitive credentials)
+    if os.path.exists('creds.yaml'):
+        try:
+            with open('creds.yaml', 'r') as f:
                 yaml_creds = yaml.safe_load(f)
                 if yaml_creds and isinstance(yaml_creds, dict):
                     # Normalize keys to lowercase
-                    creds = {k.lower(): v for k, v in yaml_creds.items()}
+                    config.update({k.lower(): v for k, v in yaml_creds.items()})
         except Exception as e:
-            logger.warning(f"Could not read {creds_path}: {e}")
+            logger.warning(f"Could not read creds.yaml: {e}")
 
     # Environment variables override file (normalize to lowercase)
-    env_keys = ['AIRTABLE_PAT', 'SYNAPSE_PAT']
+    env_keys = ['AIRTABLE_PAT', 'SYNAPSE_PAT', 'SYNAPSE_TABLE_NAME',
+                'SYNAPSE_TABLE_ID', 'SYNAPSE_KEY_FIELD', 'AIRTABLE_BASE_ID']
     for key in env_keys:
         if key in os.environ:
-            creds[key.lower()] = os.environ[key]
+            config[key.lower()] = os.environ[key]
 
     # Validate required credentials
-    if not creds.get('airtable_pat'):
+    if not config.get('airtable_pat'):
         raise ValueError("AIRTABLE_PAT not found in credentials file or environment")
-    if not creds.get('synapse_pat'):
+    if not config.get('synapse_pat'):
         raise ValueError("SYNAPSE_PAT not found in credentials file or environment")
 
-    return creds
+    return config
 
 
 def get_synapse_schema_info(syn: Synapse, table_id: str) -> Dict[str, List[str]]:
@@ -503,44 +514,42 @@ def sync_to_synapse(
 
 def main():
     """Main sync function."""
-    # Configuration - these should be set via environment variables or config file
-    # SYNAPSE_TARGET_TABLE_ID is the writable table (not a view)
-    # Support both old SYNAPSE_TABLE_ID and new SYNAPSE_TARGET_TABLE_ID for backward compatibility
-    SYNAPSE_TARGET_TABLE_ID = os.getenv('SYNAPSE_TARGET_TABLE_ID') or os.getenv('SYNAPSE_TABLE_ID')
-    AIRTABLE_BASE_ID = os.getenv('AIRTABLE_BASE_ID')
-    AIRTABLE_TABLE_NAME = os.getenv('AIRTABLE_TABLE_NAME')
-    SYNAPSE_KEY_FIELD = os.getenv('SYNAPSE_KEY_FIELD')  # Required: field to match records
-    
-    if not AIRTABLE_BASE_ID:
-        raise ValueError("AIRTABLE_BASE_ID environment variable is required")
-    if not AIRTABLE_TABLE_NAME:
-        raise ValueError("AIRTABLE_TABLE_NAME environment variable is required")
-    if not SYNAPSE_TARGET_TABLE_ID:
-        raise ValueError("SYNAPSE_TARGET_TABLE_ID environment variable is required (must be a table, not a view)")
-    if not SYNAPSE_KEY_FIELD:
-        raise ValueError("SYNAPSE_KEY_FIELD environment variable is required to prevent duplicate records")
-    
-    # Load credentials
+    # Load configuration and credentials
     try:
-        creds = load_credentials()
+        config = load_config()
     except Exception as e:
-        logger.error(f"Failed to load credentials: {e}")
+        logger.error(f"Failed to load configuration: {e}")
         sys.exit(1)
-    
+
+    # Get configuration settings
+    SYNAPSE_TARGET_TABLE_ID = config.get('synapse_table_id')
+    AIRTABLE_BASE_ID = config.get('airtable_base_id')
+    AIRTABLE_TABLE_NAME = config.get('synapse_table_name')  # Use Synapse-specific table name
+    SYNAPSE_KEY_FIELD = config.get('synapse_key_field')
+
+    if not AIRTABLE_BASE_ID:
+        raise ValueError("AIRTABLE_BASE_ID is required in config.yml or environment")
+    if not AIRTABLE_TABLE_NAME:
+        raise ValueError("SYNAPSE_TABLE_NAME is required in config.yml or environment")
+    if not SYNAPSE_TARGET_TABLE_ID:
+        raise ValueError("SYNAPSE_TABLE_ID is required in config.yml or environment (must be a table, not a view)")
+    if not SYNAPSE_KEY_FIELD:
+        raise ValueError("SYNAPSE_KEY_FIELD is required in config.yml or environment to prevent duplicate records")
+
     # Initialize Synapse client
     logger.info("Connecting to Synapse...")
     try:
         syn = Synapse()
-        syn.login(authToken=creds['synapse_pat'], silent=True)
+        syn.login(authToken=config['synapse_pat'], silent=True)
         logger.info("Successfully connected to Synapse")
     except Exception as e:
         logger.error(f"Failed to connect to Synapse: {e}")
         sys.exit(1)
-    
+
     # Initialize Airtable API
     logger.info("Connecting to Airtable...")
     try:
-        api = Api(creds['airtable_pat'])
+        api = Api(config['airtable_pat'])
         logger.info("Successfully connected to Airtable")
     except Exception as e:
         logger.error(f"Failed to connect to Airtable: {e}")

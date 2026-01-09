@@ -1,0 +1,17 @@
+# Configuration for Airtable and Synapse sync
+# Non-sensitive configuration settings
+
+# Airtable Configuration
+AIRTABLE_BASE_ID: "appUgXKhQPFjaeN2V"
+
+# Jira Sync Configuration
+JIRA_TABLE_NAME: "Jira Issues"
+JIRA_SERVER: "https://sagebionetworks.jira.com"
+JIRA_PROJECT: "NFOSI"
+# Optional: Custom JQL query (takes precedence over JIRA_PROJECT)
+# JIRA_JQL: "project IN (PROJ1, PROJ2) ORDER BY created DESC"
+
+# Synapse Sync Configuration
+SYNAPSE_TABLE_NAME: "Portal - Studies View (Staging)"
+SYNAPSE_TABLE_ID: "syn52677631"
+SYNAPSE_KEY_FIELD: "id"

@@ -24,29 +24,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def load_credentials() -> Dict[str, str]:
-    """Load credentials from creds.yaml or environment variables."""
-    creds = {}
+def load_config() -> Dict[str, str]:
+    """Load configuration and credentials from config.yml and creds.yaml."""
+    config = {}
 
-    # Load from creds.yaml (proper YAML format)
+    # Load from config.yml (non-sensitive settings)
+    if os.path.exists('config.yml'):
+        try:
+            with open('config.yml', 'r') as f:
+                yaml_config = yaml.safe_load(f)
+                if yaml_config and isinstance(yaml_config, dict):
+                    # Normalize keys to lowercase
+                    config.update({k.lower(): v for k, v in yaml_config.items()})
+        except Exception as e:
+            logger.warning(f"Could not read config.yml: {e}")
+
+    # Load from creds.yaml (sensitive credentials)
     if os.path.exists('creds.yaml'):
         try:
             with open('creds.yaml', 'r') as f:
                 yaml_creds = yaml.safe_load(f)
                 if yaml_creds and isinstance(yaml_creds, dict):
                     # Normalize keys to lowercase
-                    creds = {k.lower(): v for k, v in yaml_creds.items()}
+                    config.update({k.lower(): v for k, v in yaml_creds.items()})
         except Exception as e:
             logger.warning(f"Could not read creds.yaml: {e}")
 
     # Environment variables override file (normalize to lowercase)
     env_keys = ['JIRA_SERVER', 'JIRA_EMAIL', 'JIRA_PAT', 'JIRA_PROJECT', 'JIRA_JQL',
-                'AIRTABLE_PAT', 'AIRTABLE_BASE_ID', 'AIRTABLE_TABLE_NAME']
+                'JIRA_TABLE_NAME', 'AIRTABLE_PAT', 'AIRTABLE_BASE_ID']
     for key in env_keys:
         if key in os.environ:
-            creds[key.lower()] = os.environ[key]
+            config[key.lower()] = os.environ[key]
 
-    return creds
+    return config
 
 
 def test_jira_connection(jira_server: str, jira_email: str, jira_pat: str) -> bool:
@@ -319,24 +330,24 @@ def sync_to_airtable(api: Api, base_id: str, table_name: str, issues: List[Dict[
 
 def main():
     """Main function."""
-    # Load credentials
+    # Load configuration and credentials
     try:
-        creds = load_credentials()
+        config = load_config()
     except Exception as e:
-        logger.error(f"Failed to load credentials: {e}")
+        logger.error(f"Failed to load configuration: {e}")
         sys.exit(1)
 
-    # Get required credentials
-    JIRA_SERVER = creds.get('jira_server')
-    JIRA_EMAIL = creds.get('jira_email')
-    JIRA_PAT = creds.get('jira_pat')
-    AIRTABLE_BASE_ID = creds.get('airtable_base_id')
-    AIRTABLE_TABLE_NAME = creds.get('airtable_table_name')
-    AIRTABLE_PAT = creds.get('airtable_pat')
+    # Get required settings
+    JIRA_SERVER = config.get('jira_server')
+    JIRA_EMAIL = config.get('jira_email')
+    JIRA_PAT = config.get('jira_pat')
+    AIRTABLE_BASE_ID = config.get('airtable_base_id')
+    AIRTABLE_TABLE_NAME = config.get('jira_table_name')  # Use Jira-specific table name
+    AIRTABLE_PAT = config.get('airtable_pat')
 
     # Optional filters
-    JIRA_PROJECT = creds.get('jira_project')
-    JIRA_JQL = creds.get('jira_jql')
+    JIRA_PROJECT = config.get('jira_project')
+    JIRA_JQL = config.get('jira_jql')
 
     # Validate required variables
     missing_vars = []
