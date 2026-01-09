@@ -29,12 +29,10 @@ jobs:
     
     - name: Run sync script
       env:
+        # Configuration settings are now in config.yml
+        # Only credentials need to be passed as secrets
         AIRTABLE_PAT: ${{ secrets.AIRTABLE_PAT }}
         SYNAPSE_PAT: ${{ secrets.SYNAPSE_PAT }}
-        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
-        AIRTABLE_TABLE_NAME: ${{ secrets.AIRTABLE_TABLE_NAME }}
-        SYNAPSE_TABLE_ID: ${{ secrets.SYNAPSE_TABLE_ID || 'syn52677631' }}
-        SYNAPSE_KEY_FIELD: ${{ secrets.SYNAPSE_KEY_FIELD }}
       run: |
         source venv/bin/activate
         python sync_airtable_to_synapse.py
