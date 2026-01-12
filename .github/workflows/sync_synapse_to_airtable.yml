@@ -31,7 +31,7 @@ jobs:
         # Configuration settings are now in config.yml
         # Only credentials need to be passed as secrets
         AIRTABLE_PAT: ${{ secrets.AIRTABLE_PAT }}
-        SYNAPSE_PAT: ${{ secrets.SYNAPSE_PAT }}
+        SYNAPSE_PAT: ${{ secrets.SERVICE_TOKEN }}
       run: |
         source venv/bin/activate
         python sync_synapse_to_airtable.py
