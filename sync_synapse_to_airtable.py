@@ -11,10 +11,11 @@ import sys
 import yaml
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 
 try:
+    import requests
     import synapseclient
     from synapseclient import Synapse
     from pyairtable import Api
@@ -119,6 +120,80 @@ def get_synapse_schema_info(syn: Synapse, table_id: str) -> Dict[str, List[str]]
         return {'date_fields': [], 'text_fields': [], 'list_fields': []}
 
 
+def get_airtable_field_options(base_id: str, table_name: str, airtable_pat: str) -> Dict[str, set]:
+    """Fetch allowed select/multipleSelect options from Airtable table metadata.
+
+    Returns a dict mapping field names to their allowed option sets.
+    Raises on network/auth failure; callers should handle exceptions.
+    """
+    url = f"https://api.airtable.com/v0/meta/bases/{base_id}/tables"
+    headers = {'Authorization': f'Bearer {airtable_pat}'}
+
+    response = requests.get(url, headers=headers, timeout=30)
+    response.raise_for_status()
+
+    tables = response.json().get('tables', [])
+    target_table = None
+    for t in tables:
+        if t.get('name') == table_name:
+            target_table = t
+            break
+
+    if not target_table:
+        logger.warning(f"Table '{table_name}' not found in Airtable metadata")
+        return {}
+
+    select_options: Dict[str, set] = {}
+    for field in target_table.get('fields', []):
+        if field.get('type') in ('singleSelect', 'multipleSelects'):
+            choices = field.get('options', {}).get('choices', [])
+            select_options[field['name']] = {c['name'] for c in choices}
+
+    return select_options
+
+
+def validate_select_fields(
+    fields: Dict[str, Any],
+    select_options: Dict[str, set]
+) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
+    """Filter out select field values not in the allowed options.
+
+    Returns (cleaned_fields, [(field_name, rejected_value), ...]).
+    """
+    cleaned = dict(fields)
+    skipped: List[Tuple[str, str]] = []
+
+    for field_name, allowed in select_options.items():
+        if field_name not in cleaned:
+            continue
+
+        value = cleaned[field_name]
+
+        if isinstance(value, list):
+            non_none = [v for v in value if v is not None]
+            valid = [v for v in non_none if v in allowed]
+            rejected = [v for v in non_none if v not in allowed]
+            for v in rejected:
+                skipped.append((field_name, str(v)))
+            if valid:
+                cleaned[field_name] = valid
+            else:
+                del cleaned[field_name]
+        elif isinstance(value, str):
+            if value not in allowed:
+                skipped.append((field_name, value))
+                del cleaned[field_name]
+        else:
+            str_val = str(value)
+            if str_val not in allowed:
+                skipped.append((field_name, str_val))
+                del cleaned[field_name]
+            else:
+                cleaned[field_name] = str_val
+
+    return cleaned, skipped
+
+
 def get_synapse_table_data(syn: Synapse, table_id: str) -> List[Dict[str, Any]]:
     """Fetch all data from a Synapse table."""
     logger.info(f"Fetching data from Synapse table: {table_id}")
@@ -147,11 +222,12 @@ def sync_to_airtable(
     key_field: str,
     date_fields: Optional[List[str]] = None,
     text_fields: Optional[List[str]] = None,
-    list_fields: Optional[List[str]] = None
+    list_fields: Optional[List[str]] = None,
+    select_options: Optional[Dict[str, set]] = None
 ) -> None:
     """
     Sync records to Airtable.
-    
+
     Args:
         api: PyAirtable API instance
         base_id: Airtable base ID
@@ -160,6 +236,8 @@ def sync_to_airtable(
         key_field: Required field name to use for matching existing records (prevents duplicates)
         date_fields: List of date field names
         text_fields: List of text field names (USERID/ENTITYID)
+        list_fields: List of list field names (STRING_LIST, etc.)
+        select_options: Map of select field names to their allowed option sets
     """
     if not key_field:
         raise ValueError("key_field is required to prevent duplicate records")
@@ -188,6 +266,8 @@ def sync_to_airtable(
     created_count = 0
     updated_count = 0
     error_count = 0
+    skipped_values_count = 0
+    skipped_by_field: Dict[str, int] = {}
     
     for record in records:
         try:
@@ -260,7 +340,15 @@ def sync_to_airtable(
                 logger.warning(f"Record missing key field '{key_field}', skipping: {record}")
                 error_count += 1
                 continue
-            
+
+            # Validate select field values against allowed options
+            if select_options:
+                fields, skipped = validate_select_fields(fields, select_options)
+                for field_name, rejected_val in skipped:
+                    logger.warning(f"Skipped invalid select value '{rejected_val}' for field '{field_name}'")
+                    skipped_by_field[field_name] = skipped_by_field.get(field_name, 0) + 1
+                skipped_values_count += len(skipped)
+
             # Update existing record or create new one
             record_key = str(fields[key_field])
             if record_key in existing_records:
@@ -270,15 +358,31 @@ def sync_to_airtable(
                 # Create new record
                 table.create(fields)
                 created_count += 1
-                
+
         except Exception as e:
-            logger.error(f"Error syncing record: {e}")
+            if 'INVALID_MULTIPLE_CHOICE_OPTIONS' in str(e):
+                logger.warning(
+                    f"Record '{fields.get(key_field, '?')}': invalid select option(s) - {e}")
+            else:
+                logger.error(f"Error syncing record: {e}")
             error_count += 1
-    
-    logger.info(
+
+    summary = (
         f"Sync complete: {created_count} created, {updated_count} updated, "
         f"{error_count} errors"
     )
+    if skipped_values_count > 0:
+        summary += f", {skipped_values_count} field values skipped (invalid select options)"
+    logger.info(summary)
+
+    if skipped_by_field and select_options:
+        for field_name, count in skipped_by_field.items():
+            if count > 5:
+                logger.warning(
+                    f"Advisory: Field '{field_name}' had {count} rejected values "
+                    f"({len(select_options.get(field_name, set()))} allowed options). "
+                    f"Consider updating allowed options or changing to a text field."
+                )
 
 
 def main():
@@ -322,6 +426,25 @@ def main():
         logger.error(f"Failed to connect to Airtable: {e}")
         sys.exit(1)
     
+    # Fetch Airtable field metadata for select validation
+    select_options: Dict[str, set] = {}
+    try:
+        select_options = get_airtable_field_options(
+            AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, creds['airtable_pat']
+        )
+        if select_options:
+            logger.info(
+                f"Select fields: "
+                f"{', '.join(f'{k} ({len(v)} options)' for k, v in select_options.items())}"
+            )
+        else:
+            logger.info("No select/multipleSelect fields found in Airtable table")
+    except Exception as e:
+        logger.warning(
+            f"Could not fetch Airtable field metadata: {e}. "
+            "Proceeding without select validation."
+        )
+
     # Get schema info (date and text fields) from source view
     try:
         schema_info = get_synapse_schema_info(syn, SYNAPSE_SOURCE_VIEW_ID)
@@ -356,7 +479,8 @@ def main():
             key_field=SYNAPSE_KEY_FIELD,
             date_fields=date_fields,
             text_fields=text_fields,
-            list_fields=list_fields
+            list_fields=list_fields,
+            select_options=select_options
         )
         logger.info("Sync completed successfully")
     except Exception as e:
