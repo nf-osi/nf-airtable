@@ -60,6 +60,27 @@ def load_config() -> Dict[str, str]:
     return config
 
 
+def get_airtable_valid_fields(base_id: str, table_name: str, airtable_pat: str) -> set:
+    """Fetch valid field names from Airtable table metadata.
+
+    Returns the set of field names that exist in the Airtable table.
+    Raises on network/auth failure; callers should handle exceptions.
+    """
+    url = f"https://api.airtable.com/v0/meta/bases/{base_id}/tables"
+    headers = {'Authorization': f'Bearer {airtable_pat}'}
+
+    response = requests.get(url, headers=headers, timeout=30)
+    response.raise_for_status()
+
+    tables = response.json().get('tables', [])
+    for t in tables:
+        if t.get('name') == table_name:
+            return {field['name'] for field in t.get('fields', [])}
+
+    logger.warning(f"Table '{table_name}' not found in Airtable metadata")
+    return set()
+
+
 def test_jira_connection(jira_server: str, jira_email: str, jira_pat: str) -> bool:
     """
     Test connection to Jira API.
@@ -240,7 +261,8 @@ def test_airtable_connection(api: Api, base_id: str, table_name: str) -> bool:
         return False
 
 
-def sync_to_airtable(api: Api, base_id: str, table_name: str, issues: List[Dict[str, Any]]):
+def sync_to_airtable(api: Api, base_id: str, table_name: str, issues: List[Dict[str, Any]],
+                     valid_fields: Optional[set] = None):
     """
     Sync Jira issues to Airtable.
 
@@ -249,6 +271,7 @@ def sync_to_airtable(api: Api, base_id: str, table_name: str, issues: List[Dict[
         base_id: Airtable base ID
         table_name: Airtable table name
         issues: List of Jira issues
+        valid_fields: Set of field names that exist in the Airtable table
     """
     logger.info(f"Syncing {len(issues)} issues to Airtable table: {table_name}")
 
@@ -286,6 +309,10 @@ def sync_to_airtable(api: Api, base_id: str, table_name: str, issues: List[Dict[
                 'components': issue.get('components', '')
             }
 
+            # Filter out fields that don't exist in Airtable
+            if valid_fields:
+                record_data = {k: v for k, v in record_data.items() if k in valid_fields}
+
             if issue_key in existing_by_key:
                 # Check if update is needed
                 existing_record = existing_by_key[issue_key]
@@ -298,7 +325,7 @@ def sync_to_airtable(api: Api, base_id: str, table_name: str, issues: List[Dict[
                         break
 
                 if needs_update:
-                    table.update(existing_record['id'], record_data)
+                    table.update(existing_record['id'], record_data, typecast=True)
                     updated_count += 1
                     if updated_count % 10 == 0:
                         logger.info(f"Progress: {i}/{len(issues)} - Updated {updated_count} records...")
@@ -306,7 +333,7 @@ def sync_to_airtable(api: Api, base_id: str, table_name: str, issues: List[Dict[
                     skipped_count += 1
             else:
                 # Create new record
-                table.create(record_data)
+                table.create(record_data, typecast=True)
                 created_count += 1
                 if created_count % 10 == 0:
                     logger.info(f"Progress: {i}/{len(issues)} - Created {created_count} records...")
@@ -389,6 +416,18 @@ def main():
         logger.error("Cannot proceed without valid Airtable connection")
         sys.exit(1)
 
+    # Fetch Airtable table metadata for field validation
+    valid_fields: set = set()
+    try:
+        valid_fields = get_airtable_valid_fields(
+            AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, AIRTABLE_PAT
+        )
+        if valid_fields:
+            logger.info(f"Airtable table has {len(valid_fields)} fields")
+    except Exception as e:
+        logger.warning(f"Could not fetch Airtable field metadata: {e}. "
+                       "Proceeding without field validation.")
+
     # Fetch Jira issues
     try:
         issues = get_jira_issues(JIRA_SERVER, JIRA_EMAIL, JIRA_PAT,
@@ -403,7 +442,8 @@ def main():
 
     # Sync to Airtable
     try:
-        sync_to_airtable(api, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, issues)
+        sync_to_airtable(api, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, issues,
+                         valid_fields=valid_fields)
         logger.info("✓ Sync completed successfully")
     except Exception as e:
         logger.error(f"Failed to sync to Airtable: {e}")
