@@ -121,11 +121,12 @@ All sync scripts follow a consistent architecture:
 
 ## GitHub Actions
 
-Two workflows are configured:
+Three workflows are configured:
 - `sync_synapse_to_airtable.yml`: Runs daily at 2 AM UTC, or manually
 - `sync_airtable_to_synapse.yml`: Scheduled for 3 AM UTC but currently disabled (`if: false`)
+- `sync_jira_to_airtable.yml`: Runs daily at 4 AM UTC, or manually
 
-Both require GitHub secrets: `AIRTABLE_PAT`, `SYNAPSE_PAT`, `AIRTABLE_BASE_ID`, `AIRTABLE_TABLE_NAME`, `SYNAPSE_KEY_FIELD`, and optionally `SYNAPSE_TABLE_ID`.
+Synapse workflows require GitHub secrets: `AIRTABLE_PAT`, `SYNAPSE_PAT`. Jira workflow requires: `AIRTABLE_PAT`, `JIRA_EMAIL`, `JIRA_PAT`. Non-sensitive config (base ID, table names, Jira server/project) is in `config.yml`.
 
 ### Re-enabling Auto-Disabled Workflows
 

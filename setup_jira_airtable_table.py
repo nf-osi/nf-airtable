@@ -168,6 +168,16 @@ def create_jira_table(base_id: str, table_name: str, airtable_pat: str) -> bool:
                         'name': '24hour'
                     }
                 }
+            },
+            {
+                'name': 'labels',
+                'type': 'singleLineText',
+                'description': 'Issue labels (comma-separated)'
+            },
+            {
+                'name': 'components',
+                'type': 'singleLineText',
+                'description': 'Issue components (comma-separated)'
             }
         ]
     }

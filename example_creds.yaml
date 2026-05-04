@@ -1,4 +1,6 @@
 ## For local use only - when running elsewhere creds should be stored with secrets manager or other secure method (e.g. github secrets)
 
-AIRTABLE_PAT="pat1234..."
-SYNAPSE_PAT="abc123..."
+AIRTABLE_PAT: "pat1234..."
+SYNAPSE_PAT: "abc123..."
+JIRA_EMAIL: "your-email@example.com"
+JIRA_PAT: "your-jira-api-token"
