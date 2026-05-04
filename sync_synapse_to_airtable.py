@@ -163,31 +163,21 @@ def _strip_quotes(val: str) -> str:
     return val
 
 
-def _match_select_value(val: str, allowed: set) -> Optional[str]:
-    """Check if a value (or its quote-stripped form) is in the allowed set.
-
-    Returns the matched form if found, None otherwise. Synapse data
-    sometimes stores values with embedded quotes (e.g. '"other"')
-    that should match the clean Airtable option ('other').
-    """
-    if val in allowed:
-        return val
-    stripped = _strip_quotes(val)
-    if stripped != val and stripped in allowed:
-        return stripped
-    return None
-
-
-def validate_select_fields(
+def clean_select_fields(
     fields: Dict[str, Any],
     select_options: Dict[str, set]
 ) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
-    """Filter out select field values not in the allowed options.
+    """Clean select field values: strip embedded quotes, log new values.
 
-    Returns (cleaned_fields, [(field_name, rejected_value), ...]).
+    Synapse data sometimes stores values with embedded quotes
+    (e.g. '"other"') that should be cleaned to 'other'. Values not in
+    the allowed set are kept (typecast=True on the API call will create
+    new options) but logged as new additions.
+
+    Returns (cleaned_fields, [(field_name, new_value), ...]).
     """
     cleaned = dict(fields)
-    skipped: List[Tuple[str, str]] = []
+    new_values: List[Tuple[str, str]] = []
 
     for field_name, allowed in select_options.items():
         if field_name not in cleaned:
@@ -196,35 +186,30 @@ def validate_select_fields(
         value = cleaned[field_name]
 
         if isinstance(value, list):
-            non_none = [v for v in value if v is not None]
-            valid = []
-            for v in non_none:
-                matched = _match_select_value(str(v), allowed)
-                if matched is not None:
-                    valid.append(matched)
-                else:
-                    skipped.append((field_name, str(v)))
-            if valid:
-                cleaned[field_name] = valid
+            result = []
+            for v in value:
+                if v is None:
+                    continue
+                s = _strip_quotes(str(v))
+                result.append(s)
+                if s not in allowed:
+                    new_values.append((field_name, s))
+            if result:
+                cleaned[field_name] = result
             else:
                 del cleaned[field_name]
         elif isinstance(value, str):
-            matched = _match_select_value(value, allowed)
-            if matched is not None:
-                cleaned[field_name] = matched
-            else:
-                skipped.append((field_name, value))
-                del cleaned[field_name]
+            s = _strip_quotes(value)
+            cleaned[field_name] = s
+            if s not in allowed:
+                new_values.append((field_name, s))
         else:
-            str_val = str(value)
-            matched = _match_select_value(str_val, allowed)
-            if matched is not None:
-                cleaned[field_name] = matched
-            else:
-                skipped.append((field_name, str_val))
-                del cleaned[field_name]
+            s = _strip_quotes(str(value))
+            cleaned[field_name] = s
+            if s not in allowed:
+                new_values.append((field_name, s))
 
-    return cleaned, skipped
+    return cleaned, new_values
 
 
 def get_synapse_table_data(syn: Synapse, table_id: str) -> List[Dict[str, Any]]:
@@ -386,22 +371,22 @@ def sync_to_airtable(
                 error_count += 1
                 continue
 
-            # Validate select field values against allowed options
+            # Clean select field values (strip quotes) and log new options
             if select_options:
-                fields, skipped = validate_select_fields(fields, select_options)
-                for field_name, rejected_val in skipped:
-                    logger.warning(f"Skipped invalid select value '{rejected_val}' for field '{field_name}'")
+                fields, new_vals = clean_select_fields(fields, select_options)
+                for field_name, new_val in new_vals:
+                    logger.info(f"New select option '{new_val}' for field '{field_name}' (will be auto-created)")
                     skipped_by_field[field_name] = skipped_by_field.get(field_name, 0) + 1
-                skipped_values_count += len(skipped)
+                skipped_values_count += len(new_vals)
 
             # Update existing record or create new one
             record_key = str(fields[key_field])
             if record_key in existing_records:
-                table.update(existing_records[record_key], fields)
+                table.update(existing_records[record_key], fields, typecast=True)
                 updated_count += 1
             else:
                 # Create new record
-                table.create(fields)
+                table.create(fields, typecast=True)
                 created_count += 1
 
         except Exception as e:
@@ -419,16 +404,15 @@ def sync_to_airtable(
     if skipped_fields_count > 0:
         summary += f", {skipped_fields_count} unknown fields stripped"
     if skipped_values_count > 0:
-        summary += f", {skipped_values_count} field values skipped (invalid select options)"
+        summary += f", {skipped_values_count} new select options auto-created"
     logger.info(summary)
 
     if skipped_by_field and select_options:
         for field_name, count in skipped_by_field.items():
             if count > 5:
-                logger.warning(
-                    f"Advisory: Field '{field_name}' had {count} rejected values "
-                    f"({len(select_options.get(field_name, set()))} allowed options). "
-                    f"Consider updating allowed options or changing to a text field."
+                logger.info(
+                    f"Field '{field_name}': {count} new options added "
+                    f"(had {len(select_options.get(field_name, set()))} existing options)"
                 )
 
 
