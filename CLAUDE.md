@@ -145,3 +145,4 @@ To prevent auto-disablement, ensure the repo has at least one commit or manual w
 - **Key Field**: The `SYNAPSE_KEY_FIELD` is mandatory for sync scripts to prevent duplicate records. It should be a unique identifier (typically "id").
 - **Views vs Tables**: When syncing back to Synapse (Airtable → Synapse), you must specify a writable table ID, not a view. The environment variable naming distinguishes this: `SYNAPSE_SOURCE_VIEW_ID` for reading, `SYNAPSE_TARGET_TABLE_ID` for writing.
 - **Default Synapse Table**: If not specified, syncs default to table `syn52677631`.
+- **Jira API Token Renewal**: Jira API tokens expire after 1 year. Regenerate at https://id.atlassian.com/manage-profile/security/api-tokens and update the `JIRA_PAT` secret in GitHub repo settings. A 401 error in the Jira sync workflow indicates the token has likely expired.

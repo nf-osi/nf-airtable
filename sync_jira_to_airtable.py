@@ -104,7 +104,10 @@ def test_jira_connection(jira_server: str, jira_email: str, jira_pat: str) -> bo
         logger.error(f"✗ Failed to connect to Jira: {e}")
         if hasattr(e, 'response') and e.response is not None:
             if e.response.status_code == 401:
-                logger.error("Authentication failed. Please check your JIRA_EMAIL and JIRA_PAT")
+                logger.error("Authentication failed. Please check your JIRA_EMAIL and JIRA_PAT.")
+                logger.error("Note: Jira API tokens expire after 1 year. "
+                             "Regenerate at https://id.atlassian.com/manage-profile/security/api-tokens "
+                             "and update the JIRA_PAT secret in GitHub repo settings.")
             elif e.response.status_code == 403:
                 logger.error("Access forbidden. Your account may not have API access")
             else:
