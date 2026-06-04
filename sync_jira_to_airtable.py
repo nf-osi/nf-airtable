@@ -60,6 +60,47 @@ def load_config() -> Dict[str, str]:
     return config
 
 
+def create_jira_table(base_id: str, table_name: str, airtable_pat: str) -> bool:
+    """Create the Jira Issues table in Airtable using the Metadata API.
+
+    Returns True if the table was created successfully.
+    """
+    url = f"https://api.airtable.com/v0/meta/bases/{base_id}/tables"
+    headers = {
+        'Authorization': f'Bearer {airtable_pat}',
+        'Content-Type': 'application/json'
+    }
+
+    table_schema = {
+        'name': table_name,
+        'description': 'Jira issues synced from Jira',
+        'fields': [
+            {'name': 'key', 'type': 'singleLineText', 'description': 'Jira issue key (e.g., PROJ-123)'},
+            {'name': 'summary', 'type': 'singleLineText', 'description': 'Issue summary/title'},
+            {'name': 'url', 'type': 'url', 'description': 'Link to the Jira issue'},
+            {'name': 'type', 'type': 'singleLineText', 'description': 'Issue type (e.g., Bug, Story, Task)'},
+            {'name': 'status', 'type': 'singleLineText', 'description': 'Current status'},
+            {'name': 'priority', 'type': 'singleLineText', 'description': 'Issue priority'},
+            {'name': 'assignee', 'type': 'singleLineText', 'description': 'Assigned user'},
+            {'name': 'reporter', 'type': 'singleLineText', 'description': 'Issue reporter'},
+            {'name': 'created', 'type': 'dateTime', 'description': 'Creation date',
+             'options': {'timeZone': 'utc', 'dateFormat': {'name': 'iso'}, 'timeFormat': {'name': '24hour'}}},
+            {'name': 'updated', 'type': 'dateTime', 'description': 'Last updated date',
+             'options': {'timeZone': 'utc', 'dateFormat': {'name': 'iso'}, 'timeFormat': {'name': '24hour'}}},
+            {'name': 'labels', 'type': 'singleLineText', 'description': 'Issue labels (comma-separated)'},
+            {'name': 'components', 'type': 'singleLineText', 'description': 'Issue components (comma-separated)'},
+        ]
+    }
+
+    response = requests.post(url, headers=headers, json=table_schema, timeout=30)
+    if response.status_code in [200, 201]:
+        logger.info(f"Successfully created table '{table_name}'")
+        return True
+    else:
+        logger.error(f"Failed to create table: {response.status_code} - {response.text}")
+        return False
+
+
 def get_airtable_valid_fields(base_id: str, table_name: str, airtable_pat: str) -> set:
     """Fetch valid field names from Airtable table metadata.
 
@@ -414,12 +455,7 @@ def main():
         logger.error(f"Failed to initialize Airtable API: {e}")
         sys.exit(1)
 
-    # Test Airtable connection
-    if not test_airtable_connection(api, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME):
-        logger.error("Cannot proceed without valid Airtable connection")
-        sys.exit(1)
-
-    # Fetch Airtable table metadata for field validation
+    # Fetch Airtable table metadata — auto-create table if it doesn't exist
     valid_fields: set = set()
     try:
         valid_fields = get_airtable_valid_fields(
@@ -427,9 +463,18 @@ def main():
         )
         if valid_fields:
             logger.info(f"Airtable table has {len(valid_fields)} fields")
+        else:
+            logger.info(f"Table '{AIRTABLE_TABLE_NAME}' not found. Creating it...")
+            if not create_jira_table(AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, AIRTABLE_PAT):
+                logger.error("Failed to create Airtable table. Cannot proceed.")
+                sys.exit(1)
+            valid_fields = get_airtable_valid_fields(
+                AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME, AIRTABLE_PAT
+            )
+            logger.info(f"Created table with {len(valid_fields)} fields")
     except Exception as e:
-        logger.warning(f"Could not fetch Airtable field metadata: {e}. "
-                       "Proceeding without field validation.")
+        logger.error(f"Could not access Airtable: {e}")
+        sys.exit(1)
 
     # Fetch Jira issues
     try:
