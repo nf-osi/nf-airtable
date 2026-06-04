@@ -142,6 +142,11 @@ def create_jira_table(base_id: str, table_name: str, airtable_pat: str) -> bool:
                 'description': 'Assigned user'
             },
             {
+                'name': 'reporter',
+                'type': 'singleLineText',
+                'description': 'Issue reporter'
+            },
+            {
                 'name': 'created',
                 'type': 'dateTime',
                 'description': 'Creation date',
@@ -183,9 +188,9 @@ def create_jira_table(base_id: str, table_name: str, airtable_pat: str) -> bool:
     }
     
     try:
-        response = requests.post(url, headers=headers, json={'tables': [table_schema]})
-        
-        if response.status_code == 200:
+        response = requests.post(url, headers=headers, json=table_schema)
+
+        if response.status_code in [200, 201]:
             logger.info(f"Successfully created table '{table_name}'")
             return True
         else:
