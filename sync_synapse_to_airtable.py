@@ -120,6 +120,19 @@ def get_synapse_schema_info(syn: Synapse, table_id: str) -> Dict[str, List[str]]
         return {'date_fields': [], 'text_fields': [], 'list_fields': []}
 
 
+def _request_with_retry(method: str, url: str, headers: Dict, max_retries: int = 3, **kwargs) -> requests.Response:
+    """Make an HTTP request with retry on transient failures."""
+    for attempt in range(max_retries):
+        response = requests.request(method, url, headers=headers, **kwargs)
+        if response.status_code < 500 and response.status_code != 406 and response.status_code != 429:
+            return response
+        wait = 2 ** attempt
+        logger.warning(f"Airtable API returned {response.status_code}, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+        import time
+        time.sleep(wait)
+    return response
+
+
 def get_airtable_table_metadata(
     base_id: str, table_name: str, airtable_pat: str
 ) -> Tuple[set, Dict[str, set]]:
@@ -131,7 +144,7 @@ def get_airtable_table_metadata(
     url = f"https://api.airtable.com/v0/meta/bases/{base_id}/tables"
     headers = {'Authorization': f'Bearer {airtable_pat}'}
 
-    response = requests.get(url, headers=headers, timeout=30)
+    response = _request_with_retry('GET', url, headers=headers, timeout=30)
     response.raise_for_status()
 
     tables = response.json().get('tables', [])
