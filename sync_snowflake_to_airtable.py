@@ -197,6 +197,44 @@ def query_project_downloads(project_ids: List[str], start_date: str, end_date: s
     """
 
 
+def run_snowflake_query(query: str, max_retries: int = 3,
+                        timeout: int = 300) -> List[Dict[str, Any]]:
+    """Execute a query via `snow sql --format JSON` and return parsed rows.
+
+    Retries transient subprocess/timeout failures with exponential backoff.
+    Raises RuntimeError if all attempts fail.
+    """
+    cmd = ["snow", "sql", "--format", "JSON", "-q", query]
+    last_error: Optional[str] = None
+
+    for attempt in range(max_retries):
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=True, timeout=timeout
+            )
+            if not result.stdout.strip():
+                return []
+            data = json.loads(result.stdout)
+            return data if isinstance(data, list) else []
+        except subprocess.CalledProcessError as e:
+            last_error = e.stderr or str(e)
+            logger.warning("snow query failed (attempt %d/%d): %s",
+                           attempt + 1, max_retries, last_error)
+        except subprocess.TimeoutExpired:
+            last_error = f"timed out after {timeout}s"
+            logger.warning("snow query timed out (attempt %d/%d)",
+                           attempt + 1, max_retries)
+        except json.JSONDecodeError as e:
+            last_error = f"could not parse JSON output: {e}"
+            logger.warning("snow query JSON parse failed (attempt %d/%d): %s",
+                           attempt + 1, max_retries, e)
+
+        if attempt < max_retries - 1:
+            time.sleep(2 ** attempt)
+
+    raise RuntimeError(f"Snowflake query failed after {max_retries} attempts: {last_error}")
+
+
 def main():
     """Entry point. Implemented in later tasks."""
     raise NotImplementedError

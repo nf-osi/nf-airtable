@@ -1,6 +1,7 @@
 """Tests for the Snowflake -> Airtable file-stats sync."""
 
 import importlib
+from unittest.mock import MagicMock
 
 
 def test_module_imports():
@@ -101,3 +102,42 @@ def test_query_project_downloads_excludes_staff_and_dates():
     # staff exclusion present
     assert "user_id NOT IN" in q
     assert str(s.STAFF_USERIDS[0]) in q
+
+
+def test_run_snowflake_query_parses_json(monkeypatch):
+    import sync_snowflake_to_airtable as s
+
+    fake = MagicMock(returncode=0, stdout='[{"PROJECT_ID": "111"}]', stderr="")
+    monkeypatch.setattr(s.subprocess, "run", lambda *a, **k: fake)
+
+    rows = s.run_snowflake_query("SELECT 1")
+    assert rows == [{"PROJECT_ID": "111"}]
+
+
+def test_run_snowflake_query_returns_empty_on_blank(monkeypatch):
+    import sync_snowflake_to_airtable as s
+
+    fake = MagicMock(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(s.subprocess, "run", lambda *a, **k: fake)
+
+    assert s.run_snowflake_query("SELECT 1") == []
+
+
+def test_run_snowflake_query_retries_then_raises(monkeypatch):
+    import sync_snowflake_to_airtable as s
+
+    calls = {"n": 0}
+
+    def boom(*a, **k):
+        calls["n"] += 1
+        raise s.subprocess.CalledProcessError(1, "snow", stderr="fail")
+
+    monkeypatch.setattr(s.subprocess, "run", boom)
+    monkeypatch.setattr(s.time, "sleep", lambda *_: None)
+
+    try:
+        s.run_snowflake_query("SELECT 1", max_retries=3)
+        assert False, "expected RuntimeError"
+    except RuntimeError:
+        pass
+    assert calls["n"] == 3
