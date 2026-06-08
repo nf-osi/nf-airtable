@@ -354,6 +354,48 @@ def get_airtable_valid_fields(base_id: str, table_name: str, airtable_pat: str) 
     return set()
 
 
+def sync_to_airtable(api: Api, base_id: str, table_name: str,
+                    records: List[Dict[str, Any]], valid_fields: set):
+    """Upsert records into Airtable keyed on project_id, with change detection.
+
+    Returns (created, updated, skipped, errors).
+    """
+    table = api.table(base_id, table_name)
+    existing = table.all()
+    existing_by_key = {rec["fields"].get("project_id"): rec for rec in existing}
+    logger.info("Found %d existing records in Airtable", len(existing))
+
+    created = updated = skipped = errors = 0
+
+    for i, record in enumerate(records, 1):
+        try:
+            pid = record["project_id"]
+            data = {k: v for k, v in record.items() if not valid_fields or k in valid_fields}
+
+            if pid in existing_by_key:
+                existing_record = existing_by_key[pid]
+                existing_fields = existing_record["fields"]
+                needs_update = any(existing_fields.get(k) != v for k, v in data.items())
+                if needs_update:
+                    table.update(existing_record["id"], data, typecast=True)
+                    updated += 1
+                else:
+                    skipped += 1
+            else:
+                table.create(data, typecast=True)
+                created += 1
+
+            if i % 10 == 0:
+                time.sleep(0.2)
+        except Exception as e:  # noqa: BLE001 - count and continue
+            logger.error("Error syncing project %s: %s", record.get("project_id", "?"), e)
+            errors += 1
+
+    logger.info("Sync summary: created=%d updated=%d skipped=%d errors=%d",
+                created, updated, skipped, errors)
+    return created, updated, skipped, errors
+
+
 def main():
     """Entry point. Implemented in later tasks."""
     raise NotImplementedError

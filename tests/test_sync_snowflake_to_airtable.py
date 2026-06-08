@@ -220,3 +220,32 @@ def test_get_airtable_valid_fields_returns_field_set(monkeypatch):
 
     fields = s.get_airtable_valid_fields("appX", "Snowflake - File Stats", "pat")
     assert fields == {"project_id", "file_count"}
+
+
+def test_sync_to_airtable_creates_updates_skips(monkeypatch):
+    import sync_snowflake_to_airtable as s
+
+    # Existing record for project 111 (unchanged), none for 222.
+    existing = [{"id": "rec1", "fields": {"project_id": "111", "file_count": 10}}]
+
+    table = MagicMock()
+    table.all.return_value = existing
+    api = MagicMock()
+    api.table.return_value = table
+    monkeypatch.setattr(s.time, "sleep", lambda *_: None)
+
+    records = [
+        {"project_id": "111", "file_count": 10},   # unchanged -> skip
+        {"project_id": "222", "file_count": 5},     # new -> create
+    ]
+    valid_fields = {"project_id", "file_count"}
+
+    created, updated, skipped, errors = s.sync_to_airtable(
+        api, "appX", "Snowflake - File Stats", records, valid_fields
+    )
+
+    assert created == 1
+    assert skipped == 1
+    assert updated == 0
+    assert errors == 0
+    table.create.assert_called_once()
