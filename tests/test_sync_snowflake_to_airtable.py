@@ -141,3 +141,82 @@ def test_run_snowflake_query_retries_then_raises(monkeypatch):
     except RuntimeError:
         pass
     assert calls["n"] == 3
+
+
+def test_bytes_to_readable():
+    import sync_snowflake_to_airtable as s
+    assert s.bytes_to_readable(0) == "0 B"
+    assert s.bytes_to_readable(1024) == "1.00 KB"
+    assert s.bytes_to_readable(1536) == "1.50 KB"
+    assert s.bytes_to_readable(1024 ** 4) == "1.00 TB"
+
+
+def test_batched_splits_evenly():
+    import sync_snowflake_to_airtable as s
+    assert s.batched([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
+
+
+def test_transform_records_joins_and_defaults_zero():
+    import sync_snowflake_to_airtable as s
+
+    meta = [
+        {"PROJECT_ID": "111", "PROJECT_NAME": "Study A", "FUNDER": "NTAP",
+         "STUDY_LEADS": "Dr X", "STUDY_STATUS": "Active",
+         "DATA_STATUS": "Available", "INITIATIVE": "Init1"},
+        {"PROJECT_ID": "222", "PROJECT_NAME": "Study B", "FUNDER": "CTF",
+         "STUDY_LEADS": "", "STUDY_STATUS": "", "DATA_STATUS": "",
+         "INITIATIVE": "Other"},
+    ]
+    sizes = [{"PROJECT_ID": "111", "FILE_COUNT": 10,
+              "UNIQUE_FILE_HANDLES": 9, "TOTAL_BYTES": 1024}]
+    downloads = [{"PROJECT_ID": "111", "DOWNLOAD_BYTES": 2048,
+                  "DOWNLOAD_UNIQUE_FILES": 3}]
+
+    records = s.transform_records(meta, sizes, downloads, synced_at="2026-06-08T00:00:00Z")
+    by_id = {r["project_id"]: r for r in records}
+
+    assert by_id["111"]["file_count"] == 10
+    assert by_id["111"]["total_bytes"] == 1024
+    assert by_id["111"]["total_size_readable"] == "1.00 KB"
+    assert by_id["111"]["download_bytes"] == 2048
+    assert by_id["111"]["initiative"] == "Init1"
+    assert by_id["111"]["last_synced"] == "2026-06-08T00:00:00Z"
+    # Project with no size/download rows still appears, zeroed.
+    assert by_id["222"]["file_count"] == 0
+    assert by_id["222"]["download_unique_files"] == 0
+    assert by_id["222"]["total_bytes"] == 0
+
+
+def test_create_snowflake_table_posts_schema(monkeypatch):
+    import sync_snowflake_to_airtable as s
+
+    captured = {}
+
+    def fake_request(method, url, headers, **kwargs):
+        captured["method"] = method
+        captured["json"] = kwargs.get("json")
+        return MagicMock(status_code=200, text="ok")
+
+    monkeypatch.setattr(s, "_request_with_retry", fake_request)
+
+    ok = s.create_snowflake_table("appX", "Snowflake - File Stats", "pat")
+    assert ok is True
+    assert captured["method"] == "POST"
+    field_names = {f["name"] for f in captured["json"]["fields"]}
+    assert {"project_id", "file_count", "total_bytes", "initiative",
+            "download_unique_files", "last_synced"} <= field_names
+
+
+def test_get_airtable_valid_fields_returns_field_set(monkeypatch):
+    import sync_snowflake_to_airtable as s
+
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"tables": [
+        {"name": "Snowflake - File Stats",
+         "fields": [{"name": "project_id"}, {"name": "file_count"}]}
+    ]}
+    resp.raise_for_status = lambda: None
+    monkeypatch.setattr(s, "_request_with_retry", lambda *a, **k: resp)
+
+    fields = s.get_airtable_valid_fields("appX", "Snowflake - File Stats", "pat")
+    assert fields == {"project_id", "file_count"}

@@ -235,6 +235,125 @@ def run_snowflake_query(query: str, max_retries: int = 3,
     raise RuntimeError(f"Snowflake query failed after {max_retries} attempts: {last_error}")
 
 
+def bytes_to_readable(n: int) -> str:
+    """Convert a byte count to a human-readable string (B, KB, MB, GB, TB, PB)."""
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1024.0 or unit == "TB":
+            if unit == "B":
+                return f"{int(n)} {unit}"
+            return f"{n:.2f} {unit}"
+        n /= 1024.0
+    return f"{n:.2f} PB"
+
+
+def batched(items: List[Any], size: int) -> List[List[Any]]:
+    """Split a list into chunks of at most `size`."""
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
+def transform_records(meta: List[Dict[str, Any]],
+                      sizes: List[Dict[str, Any]],
+                      downloads: List[Dict[str, Any]],
+                      synced_at: str) -> List[Dict[str, Any]]:
+    """Join metadata, sizes, and downloads on project_id into Airtable records.
+
+    Every project in `meta` produces a record; missing size/download rows
+    default to zero. Returns new dicts (no mutation of inputs).
+    """
+    sizes_by_id = {str(r.get("PROJECT_ID")): r for r in sizes}
+    downloads_by_id = {str(r.get("PROJECT_ID")): r for r in downloads}
+
+    records: List[Dict[str, Any]] = []
+    for m in meta:
+        pid = str(m.get("PROJECT_ID"))
+        size_row = sizes_by_id.get(pid, {})
+        dl_row = downloads_by_id.get(pid, {})
+        total_bytes = int(size_row.get("TOTAL_BYTES") or 0)
+
+        records.append({
+            "project_id": pid,
+            "project_name": m.get("PROJECT_NAME") or "",
+            "funder": m.get("FUNDER") or "",
+            "initiative": m.get("INITIATIVE") or "",
+            "study_status": m.get("STUDY_STATUS") or "",
+            "data_status": m.get("DATA_STATUS") or "",
+            "study_leads": m.get("STUDY_LEADS") or "",
+            "file_count": int(size_row.get("FILE_COUNT") or 0),
+            "unique_file_handles": int(size_row.get("UNIQUE_FILE_HANDLES") or 0),
+            "total_bytes": total_bytes,
+            "total_size_readable": bytes_to_readable(total_bytes),
+            "download_bytes": int(dl_row.get("DOWNLOAD_BYTES") or 0),
+            "download_unique_files": int(dl_row.get("DOWNLOAD_UNIQUE_FILES") or 0),
+            "last_synced": synced_at,
+        })
+    return records
+
+
+def _request_with_retry(method: str, url: str, headers: Dict,
+                        max_retries: int = 3, **kwargs) -> requests.Response:
+    """HTTP request with retry on transient (5xx / 406 / 429) responses."""
+    response = None
+    for attempt in range(max_retries):
+        response = requests.request(method, url, headers=headers, **kwargs)
+        if response.status_code < 500 and response.status_code not in (406, 429):
+            return response
+        wait = 2 ** attempt
+        logger.warning("Airtable API returned %s, retrying in %ss (attempt %d/%d)",
+                       response.status_code, wait, attempt + 1, max_retries)
+        time.sleep(wait)
+    return response
+
+
+SNOWFLAKE_TABLE_FIELDS = [
+    {"name": "project_id", "type": "singleLineText", "description": "Synapse project id (upsert key)"},
+    {"name": "project_name", "type": "singleLineText", "description": "Study name"},
+    {"name": "funder", "type": "singleLineText", "description": "Funding agency"},
+    {"name": "initiative", "type": "singleLineText", "description": "Initiative"},
+    {"name": "study_status", "type": "singleLineText", "description": "Study status"},
+    {"name": "data_status", "type": "singleLineText", "description": "Data status"},
+    {"name": "study_leads", "type": "singleLineText", "description": "Study leads"},
+    {"name": "file_count", "type": "number", "options": {"precision": 0}, "description": "Distinct file nodes"},
+    {"name": "unique_file_handles", "type": "number", "options": {"precision": 0}, "description": "Distinct file handles"},
+    {"name": "total_bytes", "type": "number", "options": {"precision": 0}, "description": "Total content bytes"},
+    {"name": "total_size_readable", "type": "singleLineText", "description": "Human-readable total size"},
+    {"name": "download_bytes", "type": "number", "options": {"precision": 0}, "description": "Downloaded bytes (staff excluded)"},
+    {"name": "download_unique_files", "type": "number", "options": {"precision": 0}, "description": "Distinct downloaded files"},
+    {"name": "last_synced", "type": "dateTime", "description": "Last sync time (UTC)",
+     "options": {"timeZone": "utc", "dateFormat": {"name": "iso"}, "timeFormat": {"name": "24hour"}}},
+]
+
+
+def create_snowflake_table(base_id: str, table_name: str, airtable_pat: str) -> bool:
+    """Create the Snowflake stats table via the Airtable Metadata API."""
+    url = f"https://api.airtable.com/v0/meta/bases/{base_id}/tables"
+    headers = {"Authorization": f"Bearer {airtable_pat}", "Content-Type": "application/json"}
+    schema = {
+        "name": table_name,
+        "description": "Per-study file and download stats synced from Snowflake",
+        "fields": SNOWFLAKE_TABLE_FIELDS,
+    }
+    response = _request_with_retry("POST", url, headers=headers, json=schema, timeout=30)
+    if response.status_code in (200, 201):
+        logger.info("Created Airtable table '%s'", table_name)
+        return True
+    logger.error("Failed to create table: %s - %s", response.status_code, response.text)
+    return False
+
+
+def get_airtable_valid_fields(base_id: str, table_name: str, airtable_pat: str) -> set:
+    """Return the set of field names on the table, or empty set if absent."""
+    url = f"https://api.airtable.com/v0/meta/bases/{base_id}/tables"
+    headers = {"Authorization": f"Bearer {airtable_pat}"}
+    response = _request_with_retry("GET", url, headers=headers, timeout=30)
+    response.raise_for_status()
+    for t in response.json().get("tables", []):
+        if t.get("name") == table_name:
+            return {field["name"] for field in t.get("fields", [])}
+    logger.warning("Table '%s' not found in Airtable metadata", table_name)
+    return set()
+
+
 def main():
     """Entry point. Implemented in later tasks."""
     raise NotImplementedError
