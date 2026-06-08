@@ -86,8 +86,11 @@ if it grows past 800).
 ### Query builders (ported from `snowflake-streamlit/toolkit/queries.py`)
 - `STAFF_USERIDS` — staff user-id exclusion list (ported verbatim).
 - `query_project_meta()` → `project_id, project_name, funder, study_leads,
-  study_status, data_status`. Uses the `project_scope` CTE flattening
-  `node_latest.scope_ids` where `id = 52677631`.
+  study_status, data_status, initiative`. Uses the `project_scope` CTE flattening
+  `node_latest.scope_ids` where `id = 52677631`. `initiative` is
+  `JSON_EXTRACT_PATH_TEXT(nl.ANNOTATIONS, 'annotations.initiative.value[0]')`
+  with a `COALESCE` fallback (e.g. "Other"), per
+  `snowflake-streamlit/query_released_data_by_initiative.sql`.
 - `query_project_sizes(project_ids)` → `project_id, file_count,
   unique_file_handles, total_bytes`. Combines the file-count logic from
   `fetch_snowflake_data.py` with the content-size sum from `query_project_sizes`.
@@ -121,6 +124,7 @@ Key field: `project_id`.
 | `project_id` | singleLineText | Synapse project id (numeric string); upsert key |
 | `project_name` | singleLineText | studyName annotation |
 | `funder` | singleLineText | fundingAgency annotation |
+| `initiative` | singleLineText | initiative annotation (COALESCE fallback) |
 | `study_status` | singleLineText | studyStatus annotation |
 | `data_status` | singleLineText | dataStatus annotation |
 | `study_leads` | singleLineText | studyLeads annotation (comma-joined) |
