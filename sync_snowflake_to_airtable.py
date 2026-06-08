@@ -445,18 +445,22 @@ def main():
     records = transform_records(meta, sizes, downloads, synced_at=synced_at)
 
     # 4. Airtable connection + table
-    api = Api(airtable_pat)
-    valid_fields = get_airtable_valid_fields(base_id, table_name, airtable_pat)
-    if not valid_fields:
-        logger.info("Table '%s' not found. Creating it...", table_name)
-        if not create_snowflake_table(base_id, table_name, airtable_pat):
-            logger.error("Failed to create Airtable table. Cannot proceed.")
-            sys.exit(1)
+    try:
+        api = Api(airtable_pat)
         valid_fields = get_airtable_valid_fields(base_id, table_name, airtable_pat)
+        if not valid_fields:
+            logger.info("Table '%s' not found. Creating it...", table_name)
+            if not create_snowflake_table(base_id, table_name, airtable_pat):
+                logger.error("Failed to create Airtable table. Cannot proceed.")
+                sys.exit(1)
+            valid_fields = get_airtable_valid_fields(base_id, table_name, airtable_pat)
 
-    # 5. Upsert
-    sync_to_airtable(api, base_id, table_name, records, valid_fields)
-    logger.info("Sync completed successfully")
+        # 5. Upsert
+        sync_to_airtable(api, base_id, table_name, records, valid_fields)
+        logger.info("Sync completed successfully")
+    except Exception as e:
+        logger.error("Airtable sync failed: %s", e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

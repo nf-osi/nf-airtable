@@ -288,3 +288,34 @@ def test_main_runs_full_flow(monkeypatch):
     assert len(captured["records"]) == 1
     assert captured["records"][0]["project_id"] == "111"
     assert captured["records"][0]["download_bytes"] == 2048
+
+
+def test_main_exits_cleanly_on_airtable_failure(monkeypatch):
+    import sync_snowflake_to_airtable as s
+    import pytest
+
+    monkeypatch.setattr(s, "load_config", lambda: {
+        "airtable_pat": "pat", "airtable_base_id": "appX",
+        "snowflake_table_name": "Snowflake - File Stats",
+        "snowflake_project_view_id": "52677631",
+        "snowflake_download_start_date": "2019-01-01",
+    })
+    monkeypatch.setattr(s, "ensure_snowflake_auth", lambda cfg: False)
+
+    def fake_query(q, **k):
+        if "project_scope" in q:
+            return [{"PROJECT_ID": "111", "PROJECT_NAME": "A", "FUNDER": "NTAP",
+                     "STUDY_LEADS": "", "STUDY_STATUS": "Active",
+                     "DATA_STATUS": "Available", "INITIATIVE": "Init1"}]
+        return []
+
+    monkeypatch.setattr(s, "run_snowflake_query", fake_query)
+    monkeypatch.setattr(s, "Api", lambda pat: MagicMock())
+
+    def boom(*a, **k):
+        raise RuntimeError("airtable down")
+    monkeypatch.setattr(s, "get_airtable_valid_fields", boom)
+
+    with pytest.raises(SystemExit) as exc:
+        s.main()
+    assert exc.value.code == 1
