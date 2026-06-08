@@ -46,6 +46,13 @@ python sync_airtable_to_synapse.py
 
 # Sync Jira → Airtable
 python sync_jira_to_airtable.py
+
+# Sync Snowflake → Airtable (per-study file + download stats)
+export AIRTABLE_BASE_ID="your_base_id"
+export SNOWFLAKE_ACCOUNT="your_account"   # only needed in CI; local uses ~/.snowflake/config.toml
+export SNOWFLAKE_USER="your_user"
+export SNOWFLAKE_PAT="your_token"
+python sync_snowflake_to_airtable.py
 ```
 
 ## Architecture
@@ -97,6 +104,16 @@ All sync scripts follow a consistent architecture:
 - Handles pagination with nextPageToken
 - Supports JQL queries for filtering
 
+**Snowflake Sync:**
+- `sync_snowflake_to_airtable.py`: One-way sync from the Synapse Data Warehouse
+  (Snowflake) to Airtable. Derives the NF project list and metadata natively
+  from Snowflake (scope_ids of view 52677631), computes per-study file counts,
+  total bytes, and download activity (staff excluded), and upserts into the
+  "Snowflake - File Stats" table keyed on project_id.
+- Requires the `snow` CLI. Locally uses the configured connection; in CI the
+  script writes ~/.snowflake/config.toml from SNOWFLAKE_* secrets.
+- Query logic is ported from the snowflake-streamlit dashboards.
+
 ### Data Type Handling
 
 **DATE fields (Synapse columnType: DATE):**
@@ -121,12 +138,13 @@ All sync scripts follow a consistent architecture:
 
 ## GitHub Actions
 
-Three workflows are configured:
+Four workflows are configured:
 - `sync_synapse_to_airtable.yml`: Runs daily at 2 AM UTC, or manually
 - `sync_airtable_to_synapse.yml`: Scheduled for 3 AM UTC but currently disabled (`if: false`)
 - `sync_jira_to_airtable.yml`: Runs daily at 4 AM UTC, or manually
+- `sync_snowflake_to_airtable.yml`: Runs daily at 5 AM UTC, or manually
 
-Synapse workflows require GitHub secrets: `AIRTABLE_PAT`, `SYNAPSE_PAT`. Jira workflow requires: `AIRTABLE_PAT`, `JIRA_EMAIL`, `JIRA_PAT`. Non-sensitive config (base ID, table names, Jira server/project) is in `config.yml`.
+Synapse workflows require GitHub secrets: `AIRTABLE_PAT`, `SYNAPSE_PAT`. Jira workflow requires: `AIRTABLE_PAT`, `JIRA_EMAIL`, `JIRA_PAT`. Snowflake workflow requires: `AIRTABLE_PAT`, `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PAT`. Non-sensitive config (base ID, table names, Jira server/project, Snowflake database/schema/warehouse/role) is in `config.yml`.
 
 ### Re-enabling Auto-Disabled Workflows
 
@@ -146,3 +164,7 @@ To prevent auto-disablement, ensure the repo has at least one commit or manual w
 - **Views vs Tables**: When syncing back to Synapse (Airtable → Synapse), you must specify a writable table ID, not a view. The environment variable naming distinguishes this: `SYNAPSE_SOURCE_VIEW_ID` for reading, `SYNAPSE_TARGET_TABLE_ID` for writing.
 - **Default Synapse Table**: If not specified, syncs default to table `syn52677631`.
 - **Jira API Token Renewal**: Jira API tokens expire after 1 year. Regenerate at https://id.atlassian.com/manage-profile/security/api-tokens and update the `JIRA_PAT` secret in GitHub repo settings. A 401 error in the Jira sync workflow indicates the token has likely expired.
+- **Snowflake PAT Renewal**: Snowflake programmatic access tokens expire and
+  must be rotated. Regenerate the token and update the `SNOWFLAKE_PAT` secret in
+  GitHub repo settings. A Snowflake authentication error in the sync workflow
+  indicates the token has likely expired (analogous to the Jira PAT note).

@@ -110,6 +110,26 @@ export SYNAPSE_KEY_FIELD="id"  # Required: field to match existing records (prev
 python sync_airtable_to_synapse.py
 ```
 
+#### Snowflake to Airtable
+
+Run the sync script to surface per-study file counts, total bytes, and download activity from the Synapse Data Warehouse (Snowflake) into Airtable:
+
+**Prerequisites:** Install the Snowflake CLI:
+```bash
+pip install snowflake-cli-labs
+```
+
+For local runs, configure your Snowflake connection in `~/.snowflake/config.toml`. In CI, the script generates this file automatically from the environment variables below.
+
+```bash
+export AIRTABLE_BASE_ID="your_base_id"
+export SNOWFLAKE_ACCOUNT="your_account"   # only needed in CI; local uses ~/.snowflake/config.toml
+export SNOWFLAKE_USER="your_user"
+export SNOWFLAKE_PAT="your_token"
+
+python sync_snowflake_to_airtable.py
+```
+
 ### Environment Variables
 
 - `AIRTABLE_BASE_ID` (required): Your Airtable base ID
@@ -119,7 +139,7 @@ python sync_airtable_to_synapse.py
 
 ### GitHub Actions
 
-The repository includes GitHub Actions workflows for bidirectional syncing:
+The repository includes GitHub Actions workflows for syncing:
 
 1. **Synapse → Airtable** (`sync_synapse_to_airtable.yml`):
    - Scheduled: Runs daily at 2 AM UTC
@@ -129,6 +149,15 @@ The repository includes GitHub Actions workflows for bidirectional syncing:
    - Scheduled: Runs daily at 3 AM UTC (after Synapse → Airtable sync)
    - Manual Trigger: Can be triggered manually from the Actions tab
 
+3. **Jira → Airtable** (`sync_jira_to_airtable.yml`):
+   - Scheduled: Runs daily at 4 AM UTC
+   - Manual Trigger: Can be triggered manually from the Actions tab
+
+4. **Snowflake → Airtable** (`sync_snowflake_to_airtable.yml`):
+   - Scheduled: Runs daily at 5 AM UTC (after all other syncs)
+   - Manual Trigger: Can be triggered manually from the Actions tab
+   - Syncs per-study file counts, total bytes, and download stats from the Synapse Data Warehouse
+
 #### Setting up GitHub Secrets
 
 Add the following secrets to your GitHub repository:
@@ -136,11 +165,14 @@ Add the following secrets to your GitHub repository:
 1. Go to Settings → Secrets and variables → Actions
 2. Add the following secrets:
    - `AIRTABLE_PAT`: Your Airtable Personal Access Token
-   - `SYNAPSE_PAT`: Your Synapse Personal Access Token
+   - `SYNAPSE_PAT`: Your Synapse Personal Access Token (Synapse syncs)
    - `AIRTABLE_BASE_ID`: Your Airtable base ID
    - `AIRTABLE_TABLE_NAME`: Name of your Airtable table
    - `SYNAPSE_KEY_FIELD`: (Required) Field name for matching records (prevents duplicates)
    - `SYNAPSE_TABLE_ID`: (Optional) Synapse table ID (defaults to syn52677631)
+   - `SNOWFLAKE_ACCOUNT`: Your Snowflake account identifier (Snowflake sync)
+   - `SNOWFLAKE_USER`: Your Snowflake username (Snowflake sync)
+   - `SNOWFLAKE_PAT`: Your Snowflake programmatic access token (Snowflake sync)
 
 ## How It Works
 
