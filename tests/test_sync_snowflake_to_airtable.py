@@ -74,3 +74,30 @@ def test_ensure_snowflake_auth_noop_without_pat(tmp_path, monkeypatch):
 
     assert wrote is False
     assert not (fake_home / ".snowflake" / "config.toml").exists()
+
+
+def test_query_project_meta_uses_scope_view_and_initiative():
+    import sync_snowflake_to_airtable as s
+    q = s.query_project_meta("52677631")
+    assert "id = 52677631" in q
+    assert "annotations.studyName.value[0]" in q
+    assert "annotations.initiative.value[0]" in q
+    assert "scope_ids" in q
+
+
+def test_query_project_sizes_interpolates_ids():
+    import sync_snowflake_to_airtable as s
+    q = s.query_project_sizes(["111", "222"])
+    assert "'111', '222'" in q
+    assert "file_count" in q.lower()
+    assert "content_size" in q.lower()
+
+
+def test_query_project_downloads_excludes_staff_and_dates():
+    import sync_snowflake_to_airtable as s
+    q = s.query_project_downloads(["111"], "2019-01-01", "2026-06-08")
+    assert "objectdownload_event" in q.lower()
+    assert "2019-01-01" in q and "2026-06-08" in q
+    # staff exclusion present
+    assert "user_id NOT IN" in q
+    assert str(s.STAFF_USERIDS[0]) in q

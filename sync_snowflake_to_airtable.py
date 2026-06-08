@@ -110,6 +110,93 @@ def ensure_snowflake_auth(config: Dict[str, Any]) -> bool:
     return True
 
 
+# Staff/DCC/DPE user ids excluded from external download metrics.
+# Ported from snowflake-streamlit/toolkit/queries.py.
+STAFF_USERIDS = [
+    3421893, 3389310, 3342573, 3434950, 3459953, 3514384, 3510065,
+    3324230, 3460442, 3458117, 3434599, 3440247, 3342492, 3481671,
+    3489628, 3441756,
+]
+
+
+def query_project_meta(project_view_id: str) -> str:
+    """NF project list + metadata from node_latest scope_ids of the portal view."""
+    return f"""
+    WITH project_scope AS (
+        SELECT CAST(scopes.value AS INTEGER) AS scope_id
+        FROM synapse_data_warehouse.synapse.node_latest,
+             LATERAL FLATTEN(input => node_latest.scope_ids) scopes
+        WHERE id = {project_view_id}
+    )
+    SELECT
+        nl.id AS project_id,
+        JSON_EXTRACT_PATH_TEXT(nl.ANNOTATIONS, 'annotations.studyName.value[0]') AS project_name,
+        JSON_EXTRACT_PATH_TEXT(nl.ANNOTATIONS, 'annotations.fundingAgency.value') AS funder,
+        ARRAY_TO_STRING(PARSE_JSON(JSON_EXTRACT_PATH_TEXT(nl.ANNOTATIONS, 'annotations.studyLeads.value')), ', ') AS study_leads,
+        JSON_EXTRACT_PATH_TEXT(nl.ANNOTATIONS, 'annotations.studyStatus.value[0]') AS study_status,
+        JSON_EXTRACT_PATH_TEXT(nl.ANNOTATIONS, 'annotations.dataStatus.value[0]') AS data_status,
+        COALESCE(
+            JSON_EXTRACT_PATH_TEXT(nl.ANNOTATIONS, 'annotations.initiative.value[0]'),
+            'Other'
+        ) AS initiative
+    FROM synapse_data_warehouse.synapse.node_latest nl
+    JOIN project_scope ps ON nl.id = ps.scope_id
+    ORDER BY project_name;
+    """
+
+
+def query_project_sizes(project_ids: List[str]) -> str:
+    """Per-project file counts and total content size."""
+    project_list = ", ".join(f"'{pid}'" for pid in project_ids)
+    return f"""
+    WITH project_files AS (
+        SELECT nl.id, nl.file_handle_id, nl.project_id
+        FROM synapse_data_warehouse.synapse.node_latest nl
+        WHERE nl.project_id IN ({project_list})
+          AND nl.node_type = 'file'
+    ),
+    file_sizes AS (
+        SELECT pf.project_id, pf.id AS node_id, pf.file_handle_id, fl.content_size
+        FROM project_files pf
+        LEFT JOIN synapse_data_warehouse.synapse.file_latest fl
+          ON fl.id = pf.file_handle_id
+    )
+    SELECT
+        project_id,
+        COUNT(DISTINCT node_id) AS file_count,
+        COUNT(DISTINCT file_handle_id) AS unique_file_handles,
+        SUM(COALESCE(content_size, 0)) AS total_bytes
+    FROM file_sizes
+    GROUP BY project_id;
+    """
+
+
+def query_project_downloads(project_ids: List[str], start_date: str, end_date: str) -> str:
+    """Per-project download bytes and unique downloaded files, staff excluded."""
+    project_list = ", ".join(f"'{pid}'" for pid in project_ids)
+    excluded = ", ".join(str(uid) for uid in STAFF_USERIDS)
+    return f"""
+    WITH download_data AS (
+        SELECT
+            ode.project_id,
+            ode.file_handle_id,
+            fl.content_size
+        FROM synapse_data_warehouse.synapse_event.objectdownload_event ode
+        JOIN synapse_data_warehouse.synapse.file_latest fl
+          ON fl.id = ode.file_handle_id
+        WHERE ode.project_id IN ({project_list})
+          AND ode.record_date BETWEEN '{start_date}' AND '{end_date}'
+          AND ode.user_id NOT IN ({excluded})
+    )
+    SELECT
+        project_id,
+        SUM(COALESCE(content_size, 0)) AS download_bytes,
+        COUNT(DISTINCT file_handle_id) AS download_unique_files
+    FROM download_data
+    GROUP BY project_id;
+    """
+
+
 def main():
     """Entry point. Implemented in later tasks."""
     raise NotImplementedError
