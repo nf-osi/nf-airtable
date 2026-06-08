@@ -1,0 +1,41 @@
+name: Sync Snowflake to Airtable
+
+on:
+  schedule:
+    # Run daily at 5 AM UTC (after Synapse 2/3 AM and Jira 4 AM syncs)
+    - cron: '0 5 * * *'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m venv venv
+        source venv/bin/activate
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install snowflake-cli-labs
+
+    - name: Run sync script
+      env:
+        # Configuration settings are in config.yml.
+        # Only credentials are passed as secrets; the script writes
+        # ~/.snowflake/config.toml from these on startup.
+        AIRTABLE_PAT: ${{ secrets.AIRTABLE_PAT }}
+        SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+        SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+        SNOWFLAKE_PAT: ${{ secrets.SNOWFLAKE_PAT }}
+      run: |
+        source venv/bin/activate
+        python sync_snowflake_to_airtable.py
