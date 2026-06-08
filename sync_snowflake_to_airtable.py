@@ -67,6 +67,49 @@ def load_config() -> Dict[str, Any]:
     return config
 
 
+def ensure_snowflake_auth(config: Dict[str, Any]) -> bool:
+    """Generate ~/.snowflake/config.toml from PAT credentials when present.
+
+    Returns True if a config file was written (CI path), False if no PAT
+    credentials were found (local path — the existing connection is used).
+    """
+    account = config.get("snowflake_account")
+    user = config.get("snowflake_user")
+    token = config.get("snowflake_pat")
+
+    if not (account and user and token):
+        logger.info("No Snowflake PAT in environment; using existing local connection")
+        return False
+
+    snow_dir = os.path.expanduser("~/.snowflake")
+    os.makedirs(snow_dir, exist_ok=True)
+    config_path = os.path.join(snow_dir, "config.toml")
+
+    database = config.get("snowflake_database", "SYNAPSE_DATA_WAREHOUSE")
+    schema = config.get("snowflake_schema", "SYNAPSE")
+    warehouse = config.get("snowflake_warehouse", "COMPUTE_XSMALL")
+    role = config.get("snowflake_role", "DATA_ANALYTICS")
+
+    toml_text = (
+        'default_connection_name = "default"\n\n'
+        "[connections.default]\n"
+        f'account = "{account}"\n'
+        f'user = "{user}"\n'
+        'authenticator = "PROGRAMMATIC_ACCESS_TOKEN"\n'
+        f'token = "{token}"\n'
+        f'database = "{database}"\n'
+        f'schema = "{schema}"\n'
+        f'warehouse = "{warehouse}"\n'
+        f'role = "{role}"\n'
+    )
+
+    with open(config_path, "w") as f:
+        f.write(toml_text)
+    os.chmod(config_path, 0o600)
+    logger.info("Wrote Snowflake connection config to %s", config_path)
+    return True
+
+
 def main():
     """Entry point. Implemented in later tasks."""
     raise NotImplementedError
