@@ -249,3 +249,42 @@ def test_sync_to_airtable_creates_updates_skips(monkeypatch):
     assert updated == 0
     assert errors == 0
     table.create.assert_called_once()
+
+
+def test_main_runs_full_flow(monkeypatch):
+    import sync_snowflake_to_airtable as s
+
+    monkeypatch.setattr(s, "load_config", lambda: {
+        "airtable_pat": "pat", "airtable_base_id": "appX",
+        "snowflake_table_name": "Snowflake - File Stats",
+        "snowflake_project_view_id": "52677631",
+        "snowflake_download_start_date": "2019-01-01",
+    })
+    monkeypatch.setattr(s, "ensure_snowflake_auth", lambda cfg: False)
+
+    def fake_query(q, **k):
+        if "project_scope" in q:
+            return [{"PROJECT_ID": "111", "PROJECT_NAME": "A", "FUNDER": "NTAP",
+                     "STUDY_LEADS": "", "STUDY_STATUS": "Active",
+                     "DATA_STATUS": "Available", "INITIATIVE": "Init1"}]
+        if "objectdownload_event" in q.lower():
+            return [{"PROJECT_ID": "111", "DOWNLOAD_BYTES": 2048, "DOWNLOAD_UNIQUE_FILES": 3}]
+        return [{"PROJECT_ID": "111", "FILE_COUNT": 10,
+                 "UNIQUE_FILE_HANDLES": 9, "TOTAL_BYTES": 1024}]
+
+    monkeypatch.setattr(s, "run_snowflake_query", fake_query)
+    monkeypatch.setattr(s, "get_airtable_valid_fields",
+                        lambda *a, **k: {f["name"] for f in s.SNOWFLAKE_TABLE_FIELDS})
+
+    captured = {}
+    def fake_sync(api, base, name, records, fields):
+        captured["records"] = records
+        return (1, 0, 0, 0)
+    monkeypatch.setattr(s, "sync_to_airtable", fake_sync)
+    monkeypatch.setattr(s, "Api", lambda pat: MagicMock())
+
+    s.main()
+
+    assert len(captured["records"]) == 1
+    assert captured["records"][0]["project_id"] == "111"
+    assert captured["records"][0]["download_bytes"] == 2048

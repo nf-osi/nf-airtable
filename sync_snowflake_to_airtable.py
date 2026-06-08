@@ -41,6 +41,10 @@ ENV_KEYS = [
     "SNOWFLAKE_PAT",
 ]
 
+DEFAULT_PROJECT_VIEW_ID = "52677631"
+DEFAULT_DOWNLOAD_START_DATE = "2019-01-01"
+BATCH_SIZE = 100
+
 
 def load_config() -> Dict[str, Any]:
     """Load configuration from config.yml + creds.yaml, with env-var override.
@@ -397,8 +401,62 @@ def sync_to_airtable(api: Api, base_id: str, table_name: str,
 
 
 def main():
-    """Entry point. Implemented in later tasks."""
-    raise NotImplementedError
+    """Run the Snowflake -> Airtable file-stats sync."""
+    config = load_config()
+
+    base_id = config.get("airtable_base_id")
+    airtable_pat = config.get("airtable_pat")
+    table_name = config.get("snowflake_table_name", "Snowflake - File Stats")
+    project_view_id = str(config.get("snowflake_project_view_id", DEFAULT_PROJECT_VIEW_ID))
+    download_start = config.get("snowflake_download_start_date", DEFAULT_DOWNLOAD_START_DATE)
+
+    missing = [name for name, val in
+               (("AIRTABLE_BASE_ID", base_id), ("AIRTABLE_PAT", airtable_pat))
+               if not val]
+    if missing:
+        for var in missing:
+            logger.error("Missing required credential: %s", var)
+        sys.exit(1)
+
+    ensure_snowflake_auth(config)
+
+    # 1. Project list + metadata
+    logger.info("Querying NF project metadata from Snowflake...")
+    meta = run_snowflake_query(query_project_meta(project_view_id))
+    if not meta:
+        logger.warning("No projects returned from Snowflake; nothing to sync")
+        sys.exit(0)
+    project_ids = [str(m.get("PROJECT_ID")) for m in meta if m.get("PROJECT_ID") is not None]
+    logger.info("Found %d NF projects", len(project_ids))
+
+    # 2. Sizes + downloads, batched
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    sizes: List[Dict[str, Any]] = []
+    downloads: List[Dict[str, Any]] = []
+    batches = batched(project_ids, BATCH_SIZE)
+    for n, batch in enumerate(batches, 1):
+        logger.info("Querying stats batch %d/%d (%d projects)...", n, len(batches), len(batch))
+        sizes.extend(run_snowflake_query(query_project_sizes(batch)))
+        downloads.extend(run_snowflake_query(
+            query_project_downloads(batch, download_start, today)))
+
+    # 3. Transform
+    synced_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    records = transform_records(meta, sizes, downloads, synced_at=synced_at)
+
+    # 4. Airtable connection + table
+    api = Api(airtable_pat)
+    valid_fields = get_airtable_valid_fields(base_id, table_name, airtable_pat)
+    if not valid_fields:
+        logger.info("Table '%s' not found. Creating it...", table_name)
+        if not create_snowflake_table(base_id, table_name, airtable_pat):
+            logger.error("Failed to create Airtable table. Cannot proceed.")
+            sys.exit(1)
+        valid_fields = get_airtable_valid_fields(base_id, table_name, airtable_pat)
+
+    # 5. Upsert
+    sync_to_airtable(api, base_id, table_name, records, valid_fields)
+    logger.info("Sync completed successfully")
 
 
 if __name__ == "__main__":
