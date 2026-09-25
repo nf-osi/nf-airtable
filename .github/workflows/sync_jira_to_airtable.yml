@@ -36,3 +36,13 @@ jobs:
       run: |
         source venv/bin/activate
         python sync_jira_to_airtable.py
+
+    # After the Jira sync, so every ticket the crosswalk names already has a record.
+    # Fails without writing anything if the crosswalk is missing or stale.
+    - name: Link studies to their open Jira tickets
+      env:
+        AIRTABLE_PAT: ${{ secrets.AIRTABLE_PAT }}
+        SYNAPSE_PAT: ${{ secrets.SYNAPSE_PAT }}
+      run: |
+        source venv/bin/activate
+        python sync_crosswalk_to_airtable.py

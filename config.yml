@@ -15,3 +15,12 @@ JIRA_PROJECT: "NFOSI"
 SYNAPSE_TABLE_NAME: "Portal - Studies View (Staging)"
 SYNAPSE_TABLE_ID: "syn52677631"
 SYNAPSE_KEY_FIELD: "id"
+
+# Study -> Jira ticket links (sync_crosswalk_to_airtable.py, runs after the Jira sync)
+# The crosswalk nf-osi/auto-jira publishes daily: open NFOSI tickets per Synapse project
+CROSSWALK_SYNAPSE_ID: "syn77540283"
+STUDIES_TABLE_NAME: "Studies"
+# Studies' link to the staging table, whose SYNAPSE_KEY_FIELD holds the Synapse ID
+STUDIES_SYNAPSE_LINK_FIELD: "Portal - Studies View (Staging)"
+# Owned by the sync and rewritten every run; the hand-maintained "Jira Issues" column is never touched
+STUDIES_AUTO_JIRA_FIELD: "Jira Issues (auto)"
