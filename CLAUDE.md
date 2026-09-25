@@ -46,6 +46,13 @@ python sync_airtable_to_synapse.py
 
 # Sync Jira → Airtable
 python sync_jira_to_airtable.py
+
+# Link Studies to their open Jira tickets (after the Jira sync)
+python sync_crosswalk_to_airtable.py --dry-run   # print the plan, write nothing
+python sync_crosswalk_to_airtable.py
+
+# Tests (pure, no network)
+pip install pytest && python -m pytest tests/
 ```
 
 ## Architecture
@@ -97,6 +104,14 @@ All sync scripts follow a consistent architecture:
 - Handles pagination with nextPageToken
 - Supports JQL queries for filtering
 
+**Study -> Jira links:**
+- `sync_crosswalk_to_airtable.py` fills the Studies table's `Jira Issues (auto)` column (`STUDIES_AUTO_JIRA_FIELD`) with the open NFOSI tickets that reference each study.
+- The mapping is not derived here. `nf-osi/auto-jira` publishes it daily as a crosswalk on Synapse (`CROSSWALK_SYNAPSE_ID`, `syn77540283`): it extracts Synapse IDs from ticket text and resolves folders and datasets to their parent project. This script only joins it onto Airtable: each study's link to `Portal - Studies View (Staging)` gives its Synapse ID, and each ticket key finds its `Jira Issues` record.
+- The auto column is **owned by the sync**: every run rewrites it to equal the crosswalk, so closed tickets drop off. The hand-maintained `Jira Issues` column is never written. Airtable's reverse field in `Jira Issues` is `Studies 2`.
+- A study with no Synapse link is skipped, not cleared. A ticket missing from the `Jira Issues` table (not synced yet) is skipped and logged.
+- The crosswalk must be schema version 1 and verified against Jira within `MAX_AGE_DAYS` (7), judged by the later of its `generated_at` and the entity's `verified_at` annotation (auto-jira skips re-uploading unchanged content). Otherwise the script exits 1 **without writing anything**, so a dead publisher can never blank the column.
+- `plan_links()` is pure, and is what `tests/test_sync_crosswalk_to_airtable.py` covers. Locally, Synapse falls back to the cached `synapseclient` login when `creds.yaml` has no `SYNAPSE_PAT`.
+
 ### Data Type Handling
 
 **DATE fields (Synapse columnType: DATE):**
@@ -124,9 +139,9 @@ All sync scripts follow a consistent architecture:
 Three workflows are configured:
 - `sync_synapse_to_airtable.yml`: Runs daily at 2 AM UTC, or manually
 - `sync_airtable_to_synapse.yml`: Scheduled for 3 AM UTC but currently disabled (`if: false`)
-- `sync_jira_to_airtable.yml`: Runs daily at 4 AM UTC, or manually
+- `sync_jira_to_airtable.yml`: Runs daily at 4 AM UTC, or manually. Its second step runs `sync_crosswalk_to_airtable.py` after the Jira sync, so every linked ticket already has a record. The crosswalk is republished at 06:00 UTC, so this step reads the previous day's.
 
-Synapse workflows require GitHub secrets: `AIRTABLE_PAT`, `SYNAPSE_PAT`. Jira workflow requires: `AIRTABLE_PAT`, `JIRA_EMAIL`, `JIRA_PAT`. Non-sensitive config (base ID, table names, Jira server/project) is in `config.yml`.
+Synapse workflows require GitHub secrets: `AIRTABLE_PAT`, `SYNAPSE_PAT`. Jira workflow requires: `AIRTABLE_PAT`, `JIRA_EMAIL`, `JIRA_PAT`, plus `SYNAPSE_PAT` for its study-linking step (read access to `syn74389661`). Non-sensitive config (base ID, table names, Jira server/project) is in `config.yml`.
 
 ### Re-enabling Auto-Disabled Workflows
 
